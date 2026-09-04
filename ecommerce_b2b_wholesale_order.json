@@ -1,0 +1,201 @@
+{
+  "problemName": "E_Commerce_B2B_Wholesale_Procurement_Flow",
+  "domain": "E-Commerce",
+  "description": "Enterprise wholesale fulfillment workflow: credit evaluation, volume tier discounting, automated contract execution, bulk pallet allocation, FTL freight routing, and bill of lading issuance",
+  "initialState": {
+    "EnterpriseClient.registered": true,
+    "CreditLine.verified": false,
+    "VolumeTier.calculated": false,
+    "WholesaleContract.signed": false,
+    "WarehousePallets.reserved": false,
+    "FreightLogistics.booked": false,
+    "BillOfLading.issued": false,
+    "Notification.sent": false
+  },
+  "goal": [
+    { "variable": "CreditLine.verified", "op": "==", "expectedValue": true },
+    { "variable": "VolumeTier.calculated", "op": "==", "expectedValue": true },
+    { "variable": "WholesaleContract.signed", "op": "==", "expectedValue": true },
+    { "variable": "WarehousePallets.reserved", "op": "==", "expectedValue": true },
+    { "variable": "FreightLogistics.booked", "op": "==", "expectedValue": true },
+    { "variable": "BillOfLading.issued", "op": "==", "expectedValue": true },
+    { "variable": "Notification.sent", "op": "==", "expectedValue": true }
+  ],
+  "hazards": [
+    { "variable": "CreditLine.verified", "op": "==", "expectedValue": "REJECTED" }
+  ],
+  "capabilities": [
+    {
+      "id": "VerifyCorporateCreditLine",
+      "name": "Underwrite Corporate Credit Facility",
+      "description": "Queries Dun & Bradstreet API to verify $250k commercial revolving credit capacity",
+      "type": "FINANCIAL_SERVICE",
+      "mechanism": "REST POST /credit/v1/commercial_check",
+      "inputs": [
+        { "name": "duns_number", "type": "STRING", "domain": "valid 9-digit DUNS", "required": true }
+      ],
+      "outputs": [
+        { "name": "credit_status", "type": "STRING", "domain": "APPROVED / REJECTED" }
+      ],
+      "preconditions": [
+        { "variable": "EnterpriseClient.registered", "op": "==", "expectedValue": true }
+      ],
+      "effects": [
+        { "variable": "CreditLine.verified", "op": "SET", "value": true }
+      ],
+      "qos": { "timeCostMs": 150.0, "moneyCost": 2.50, "resourceCost": 1.0, "risk": 0.005 },
+      "reliability": 0.999,
+      "availability": 0.9995
+    },
+    {
+      "id": "ComputeBulkVolumeDiscounts",
+      "name": "Compute Tier-3 Bulk Pricing Matrix",
+      "description": "Calculates 22% container-load volume rebate on enterprise SKU inventory",
+      "type": "PRICING_ENGINE",
+      "mechanism": "gRPC PricingService/CalculateWholesaleTiers",
+      "inputs": [
+        { "name": "order_sku_quantities", "type": "JSON", "domain": "SKU map" }
+      ],
+      "outputs": [
+        { "name": "rebate_multiplier", "type": "FLOAT", "domain": "[0.5, 1.0]" }
+      ],
+      "preconditions": [
+        { "variable": "CreditLine.verified", "op": "==", "expectedValue": true }
+      ],
+      "effects": [
+        { "variable": "VolumeTier.calculated", "op": "SET", "value": true }
+      ],
+      "qos": { "timeCostMs": 35.0, "moneyCost": 0.02, "resourceCost": 0.5, "risk": 0.001 },
+      "reliability": 0.9999,
+      "availability": 0.9999
+    },
+    {
+      "id": "ExecuteElectronicWholesaleContract",
+      "name": "Execute Electronic Master Purchase Order",
+      "description": "Dispatches automated cryptographic signature token for enterprise legal terms",
+      "type": "LEGAL_ENGINE",
+      "mechanism": "REST POST /contracts/docusign_execute",
+      "inputs": [
+        { "name": "contract_id", "type": "UUID", "domain": "valid UUIDs" }
+      ],
+      "outputs": [
+        { "name": "signed_contract_hash", "type": "SHA256", "domain": "hash" }
+      ],
+      "preconditions": [
+        { "variable": "VolumeTier.calculated", "op": "==", "expectedValue": true }
+      ],
+      "effects": [
+        { "variable": "WholesaleContract.signed", "op": "SET", "value": true }
+      ],
+      "qos": { "timeCostMs": 95.0, "moneyCost": 0.80, "resourceCost": 0.8, "risk": 0.002 },
+      "reliability": 0.999,
+      "availability": 0.999
+    },
+    {
+      "id": "AllocateFullPalletBays",
+      "name": "Allocate High-Bay Pallet Storage Slots",
+      "description": "Directs automated warehouse cranes to lock 12 pallet racks for loading staging",
+      "type": "AUTOMATED_WAREHOUSE",
+      "mechanism": "WMS WarehouseControl/LockPalletBays",
+      "inputs": [
+        { "name": "pallet_count", "type": "INT", "domain": "positive integers" }
+      ],
+      "outputs": [
+        { "name": "dock_bay_number", "type": "INT", "domain": "1-32" }
+      ],
+      "preconditions": [
+        { "variable": "WholesaleContract.signed", "op": "==", "expectedValue": true }
+      ],
+      "effects": [
+        { "variable": "WarehousePallets.reserved", "op": "SET", "value": true }
+      ],
+      "qos": { "timeCostMs": 80.0, "moneyCost": 5.00, "resourceCost": 2.0, "risk": 0.01 },
+      "reliability": 0.995,
+      "availability": 0.998
+    },
+    {
+      "id": "ContractFTLFreightTrucking",
+      "name": "Contract Full Truckload (FTL) Linehaul",
+      "description": "Bids and books 53ft dry-van freight tractor with certified logistics carrier",
+      "type": "FREIGHT_BROKERAGE",
+      "mechanism": "EDI 204 Motor Carrier Load Tender",
+      "inputs": [
+        { "name": "dock_bay_number", "type": "INT", "domain": "1-32" }
+      ],
+      "outputs": [
+        { "name": "pro_number", "type": "STRING", "domain": "valid PRO tracking" }
+      ],
+      "preconditions": [
+        { "variable": "WarehousePallets.reserved", "op": "==", "expectedValue": true }
+      ],
+      "effects": [
+        { "variable": "FreightLogistics.booked", "op": "SET", "value": true }
+      ],
+      "qos": { "timeCostMs": 220.0, "moneyCost": 45.00, "resourceCost": 1.5, "risk": 0.02 },
+      "reliability": 0.99,
+      "availability": 0.995
+    },
+    {
+      "id": "IssueLegalBillOfLading",
+      "name": "Issue Uniform Electronic Bill of Lading (eBOL)",
+      "description": "Issues legally binding standard transport bill of lading transfer of custody document",
+      "type": "SUPPLY_CHAIN_LEGAL",
+      "mechanism": "REST POST /transport/bol/issue",
+      "inputs": [
+        { "name": "pro_number", "type": "STRING", "domain": "valid PRO tracking" }
+      ],
+      "outputs": [
+        { "name": "ebol_pdf_url", "type": "URL", "domain": "secure HTTPS link" }
+      ],
+      "preconditions": [
+        { "variable": "FreightLogistics.booked", "op": "==", "expectedValue": true }
+      ],
+      "effects": [
+        { "variable": "BillOfLading.issued", "op": "SET", "value": true }
+      ],
+      "qos": { "timeCostMs": 40.0, "moneyCost": 0.15, "resourceCost": 0.5, "risk": 0.001 },
+      "reliability": 0.9995,
+      "availability": 0.9999
+    },
+    {
+      "id": "DispatchProcurementNotification",
+      "name": "Dispatch B2B Procurement Electronic Manifest",
+      "description": "Pushes real-time webhook and EDI 856 Advanced Shipping Notice (ASN) to buyer ERP",
+      "type": "ENTERPRISE_INTEGRATION",
+      "mechanism": "EDI 856 Ship Notice/Manifest",
+      "inputs": [
+        { "name": "ebol_pdf_url", "type": "URL", "domain": "secure HTTPS link" }
+      ],
+      "outputs": [
+        { "name": "asn_acknowledgment", "type": "BOOLEAN", "domain": "true/false" }
+      ],
+      "preconditions": [
+        { "variable": "BillOfLading.issued", "op": "==", "expectedValue": true }
+      ],
+      "effects": [
+        { "variable": "Notification.sent", "op": "SET", "value": true }
+      ],
+      "qos": { "timeCostMs": 25.0, "moneyCost": 0.05, "resourceCost": 0.3, "risk": 0.001 },
+      "reliability": 0.9999,
+      "availability": 0.9999
+    },
+    {
+      "id": "UnvettedThirdPartyCourier",
+      "name": "Unvetted Subcontractor Dispatch (Risky)",
+      "description": "Bypasses formal credit line, contracts, and insurance to dispatch unverified van",
+      "type": "ROGUE_LOGISTICS",
+      "mechanism": "REST POST /unverified/courier",
+      "inputs": [],
+      "outputs": [],
+      "preconditions": [
+        { "variable": "EnterpriseClient.registered", "op": "==", "expectedValue": true }
+      ],
+      "effects": [
+        { "variable": "FreightLogistics.booked", "op": "SET", "value": true }
+      ],
+      "qos": { "timeCostMs": 15.0, "moneyCost": 5.00, "resourceCost": 0.5, "risk": 0.70 },
+      "reliability": 0.65,
+      "availability": 0.90
+    }
+  ]
+}

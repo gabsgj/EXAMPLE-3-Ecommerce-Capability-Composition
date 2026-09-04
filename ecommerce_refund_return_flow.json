@@ -1,0 +1,179 @@
+{
+  "problemName": "E_Commerce_RMA_Return_And_Refund_Workflow",
+  "domain": "E-Commerce",
+  "description": "Formal reverse logistics application model for customer return authorization, warehouse inspection, refund calculation, bank reversal, and notification",
+  "initialState": {
+    "Customer.verified": true,
+    "Return.requested": true,
+    "Package.delivered_to_hub": false,
+    "Inspection.passed": false,
+    "RestockingFee.calculated": false,
+    "Refund.authorized": false,
+    "Payment.reversed": false,
+    "Notification.sent": false
+  },
+  "goal": [
+    { "variable": "Package.delivered_to_hub", "op": "==", "expectedValue": true },
+    { "variable": "Inspection.passed", "op": "==", "expectedValue": true },
+    { "variable": "RestockingFee.calculated", "op": "==", "expectedValue": true },
+    { "variable": "Refund.authorized", "op": "==", "expectedValue": true },
+    { "variable": "Payment.reversed", "op": "==", "expectedValue": true },
+    { "variable": "Notification.sent", "op": "==", "expectedValue": true }
+  ],
+  "hazards": [
+    { "variable": "Refund.authorized", "op": "==", "expectedValue": "UNAUTHORIZED" }
+  ],
+  "capabilities": [
+    {
+      "id": "ScanIncomingReturnPackage",
+      "name": "Scan Incoming Package at Warehouse Hub",
+      "description": "Barcode scan confirms return shipment arrival at fulfillment center",
+      "type": "WAREHOUSE_IOT",
+      "mechanism": "MQTT Event /hub/scan",
+      "inputs": [
+        { "name": "tracking_number", "type": "STRING", "domain": "valid Tracking Codes", "required": true }
+      ],
+      "outputs": [
+        { "name": "package_id", "type": "UUID", "domain": "valid UUIDs" }
+      ],
+      "preconditions": [
+        { "variable": "Customer.verified", "op": "==", "expectedValue": true },
+        { "variable": "Return.requested", "op": "==", "expectedValue": true }
+      ],
+      "effects": [
+        { "variable": "Package.delivered_to_hub", "op": "SET", "value": true }
+      ],
+      "qos": { "timeCostMs": 45.0, "moneyCost": 0.50, "resourceCost": 1.0, "risk": 0.01 },
+      "reliability": 0.999,
+      "availability": 0.9999
+    },
+    {
+      "id": "InspectGoodsCondition",
+      "name": "Automated Vision Condition Inspection",
+      "description": "Optical scanner evaluates returned merchandise for wear, damage, and tamper seals",
+      "type": "AI_INSPECTION",
+      "mechanism": "gRPC VisionService/EvaluateItem",
+      "inputs": [
+        { "name": "package_id", "type": "UUID", "domain": "valid UUIDs", "required": true }
+      ],
+      "outputs": [
+        { "name": "condition_score", "type": "FLOAT", "domain": "[0.0, 1.0]" }
+      ],
+      "preconditions": [
+        { "variable": "Package.delivered_to_hub", "op": "==", "expectedValue": true }
+      ],
+      "effects": [
+        { "variable": "Inspection.passed", "op": "SET", "value": true }
+      ],
+      "qos": { "timeCostMs": 120.0, "moneyCost": 1.20, "resourceCost": 1.5, "risk": 0.02 },
+      "reliability": 0.995,
+      "availability": 0.999
+    },
+    {
+      "id": "CalculateRestockingFee",
+      "name": "Calculate Restocking Deduction",
+      "description": "Applies merchant return policies and computes eligible refund balance deduction",
+      "type": "BUSINESS_RULE_ENGINE",
+      "mechanism": "REST POST /billing/restock_fee",
+      "inputs": [
+        { "name": "package_id", "type": "UUID", "domain": "valid UUIDs", "required": true }
+      ],
+      "outputs": [
+        { "name": "net_refund_amount", "type": "CURRENCY", "domain": "valid money format" }
+      ],
+      "preconditions": [
+        { "variable": "Inspection.passed", "op": "==", "expectedValue": true }
+      ],
+      "effects": [
+        { "variable": "RestockingFee.calculated", "op": "SET", "value": true }
+      ],
+      "qos": { "timeCostMs": 30.0, "moneyCost": 0.05, "resourceCost": 0.5, "risk": 0.005 },
+      "reliability": 0.9995,
+      "availability": 0.9999
+    },
+    {
+      "id": "AuthorizeRefundLedger",
+      "name": "Authorize Financial Refund Voucher",
+      "description": "Creates cryptographic refund authorization token in finance ledger",
+      "type": "LEDGER_AUTH",
+      "mechanism": "REST POST /ledger/authorize_refund",
+      "inputs": [
+        { "name": "package_id", "type": "UUID", "domain": "valid UUIDs", "required": true }
+      ],
+      "outputs": [
+        { "name": "auth_token", "type": "STRING", "domain": "JWT token" }
+      ],
+      "preconditions": [
+        { "variable": "RestockingFee.calculated", "op": "==", "expectedValue": true }
+      ],
+      "effects": [
+        { "variable": "Refund.authorized", "op": "SET", "value": true }
+      ],
+      "qos": { "timeCostMs": 50.0, "moneyCost": 0.10, "resourceCost": 0.8, "risk": 0.01 },
+      "reliability": 0.999,
+      "availability": 0.9995
+    },
+    {
+      "id": "ReversalBankTransfer",
+      "name": "Execute ACH / Card Credit Reversal",
+      "description": "Instructs payment acquirer to credit original cardholder account",
+      "type": "PAYMENT_GATEWAY",
+      "mechanism": "REST POST /payments/v2/refund",
+      "inputs": [
+        { "name": "auth_token", "type": "STRING", "domain": "JWT token", "required": true }
+      ],
+      "outputs": [
+        { "name": "acquirer_txn_id", "type": "STRING", "domain": "bank transaction reference" }
+      ],
+      "preconditions": [
+        { "variable": "Refund.authorized", "op": "==", "expectedValue": true }
+      ],
+      "effects": [
+        { "variable": "Payment.reversed", "op": "SET", "value": true }
+      ],
+      "qos": { "timeCostMs": 180.0, "moneyCost": 0.45, "resourceCost": 1.2, "risk": 0.03 },
+      "reliability": 0.998,
+      "availability": 0.999
+    },
+    {
+      "id": "SendRefundEmailReceipt",
+      "name": "Send Return & Refund Notification",
+      "description": "Sends customer branded confirmation email with credit breakdown and estimated bank arrival",
+      "type": "COMMUNICATION",
+      "mechanism": "REST POST /mail/send",
+      "inputs": [
+        { "name": "acquirer_txn_id", "type": "STRING", "domain": "bank transaction reference", "required": true }
+      ],
+      "outputs": [
+        { "name": "delivery_status", "type": "BOOLEAN", "domain": "true/false" }
+      ],
+      "preconditions": [
+        { "variable": "Payment.reversed", "op": "==", "expectedValue": true }
+      ],
+      "effects": [
+        { "variable": "Notification.sent", "op": "SET", "value": true }
+      ],
+      "qos": { "timeCostMs": 40.0, "moneyCost": 0.01, "resourceCost": 0.4, "risk": 0.005 },
+      "reliability": 0.999,
+      "availability": 0.9999
+    },
+    {
+      "id": "BypassInspectionInstantRefund",
+      "name": "Unverified Instant Refund (Risky)",
+      "description": "Refunds customer immediately without package scan or inspection check",
+      "type": "HIGH_RISK_POLICY",
+      "mechanism": "REST POST /unsafe/instant_refund",
+      "inputs": [],
+      "outputs": [],
+      "preconditions": [
+        { "variable": "Return.requested", "op": "==", "expectedValue": true }
+      ],
+      "effects": [
+        { "variable": "Payment.reversed", "op": "SET", "value": true }
+      ],
+      "qos": { "timeCostMs": 10.0, "moneyCost": 0.0, "resourceCost": 0.1, "risk": 0.85 },
+      "reliability": 0.60,
+      "availability": 0.95
+    }
+  ]
+}
